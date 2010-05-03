@@ -1,0 +1,55 @@
+<?php
+function ezproxied_node_schema() {
+  $schema['ezproxied_node'] = array(
+   'description' => t('The base table for EZProxied nodes.'),
+    'fields' => array(
+      'nid' => array(
+        'type' => 'serial',
+        'unsigned' => TRUE,
+        'not null' => TRUE),
+      'vid' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE,
+        'default' => 0),
+      'redirect_id' => array(
+        'type' => 'int',
+        'unsigned' => TRUE,
+        'not null' => TRUE),
+      'title' => array(
+        'type' => 'text',
+        'not null' => TRUE,
+        'default' => ''),
+      'link' => array(
+        'type' => 'text',
+        'not null' => TRUE,
+        'default' => ''),
+      'ezproxy_link' => array(
+        'type' => 'text',
+        'not null' => TRUE,
+        'default' => ''),
+      'redirect_link' => array(
+        'type' => 'text',
+        'not null' => TRUE,
+        'default' => ''),
+      ),
+    'primary key' => array('vid','nid'),
+    'indexes' => array(
+      'nid' => array('nid'))
+  );
+  return $schema;
+}
+ 
+ /**
+ * Implementation of hook_install()
+ */
+function ezproxied_node_install() {
+  drupal_install_schema('ezproxied_node');
+}
+
+ /**
+ * Implementation of hook_uninstall().
+ */
+function ezproxied_node_uninstall() {
+  drupal_uninstall_schema('ezproxied_node');
+}

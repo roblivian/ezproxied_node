@@ -1,0 +1,331 @@
+<?php
+
+module_load_include('inc', 'ezproxied_node', 'ezproxied_node.views');
+
+global $_ezproxied_node_ezproxy_base;
+$_ezproxied_node_ezproxy_base = "http://your.ezproxy";
+
+global $_ezproxied_node_link_default;
+$_ezproxied_node_link_default = "http://example.com";
+
+global $_ezproxied_node_ezproxy_ws_passwd;
+$_ezproxied_node_ezproxy_ws_passwd = "some_password";
+
+function ezproxied_node_menu() {
+
+  $items = array();
+
+  $items['indexes/redirect'] = array(
+    'page callback' => 'ezproxied_node_redirect',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  $items['databases.csv'] = array(
+    'page callback' => 'databases_csv',
+    'access callback' => TRUE,
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
+function databases_csv() {
+  $result = db_query("SELECT node.nid AS nid,
+      node.title AS node_title,
+      ezproxied_node.redirect_link AS ezproxied_node_redirect_link
+    FROM node node
+    LEFT JOIN ezproxied_node ezproxied_node ON node.vid = ezproxied_node.vid
+    WHERE (node.status <> 0) AND (node.type in ('ezproxied_node'))
+    ORDER BY node_title");
+
+  while ( $row = db_fetch_object( $result)) {
+    $output .= '"'. $row->node_title .'","http://'. $_SERVER['SERVER_NAME'] . base_path() . $row->ezproxied_node_redirect_link .'"
+';
+  }
+  
+  header("Content-type: text/csv");
+  header("Content-disposition: attachment; filename=databases.csv");
+  
+  print $output;
+
+}
+
+function ezproxied_node_node_info() {
+  return array (
+    'ezproxied_node' => array(
+      'name' => t('EZProxied Node'),
+      'module' => 'ezproxied_node',
+      'description' => t("Enables the creation of an EZProxied node, and provides a 'permanent' link."),
+      'has_title' => TRUE,
+      'title_label' => t('Title'),
+      'has_body' => TRUE,
+      'body_label' => t('Description'),
+    ),
+  );
+}
+
+function ezproxied_node_access( $op, $node, $account) {
+ 
+  global $user;
+
+  if (empty($account)) {
+    $account = $user;
+  }
+
+  if ($op == 'create') {
+    //drupal_set_message( $op .":". user_access('create ezproxied node', $account));
+    return user_access('create ezproxied node', $account);
+  }
+
+  if ($op == 'update') {
+    /*
+    if (user_access('edit any ezproxied node', $account) || (user_access('edit own ezproxied node', $account) && ($account->uid == $node->uid))) {
+      return TRUE;
+    }
+    drupal_set_message($op .":". user_access('edit ezproxied node', $account));
+    */
+    return user_access('edit ezproxied node', $account);
+  }
+
+  if ($op == 'delete') {
+    /*
+    if (user_access('delete any ezproxied node', $account) || (user_access('delete own ezproxied node', $account) && ($account->uid == $node->uid))) {
+      return TRUE;
+    }
+    drupal_set_message($op .":". user_access('delete ezproxied node', $account));
+    */
+    return user_access('delete ezproxied node', $account);
+  }
+}
+
+function ezproxied_node_perm() {
+  return array(
+    'create ezproxied node',
+    'delete ezproxied node',
+    'edit ezproxied node',
+  );
+}
+
+function ezproxied_node_form( &$node) {
+
+  global $_ezproxied_node_link_default;
+
+  $type = node_get_types( 'type', $node);
+
+  if ( $type->has_title) {
+     $form['title'] = array(
+      '#type' => 'textfield',
+      '#title' => check_plain($type->title_label),
+      '#required' => TRUE,
+      '#default_value' => $node->title,
+      '#weight' => -5
+    );
+  }
+
+  if ($type->has_body) {
+    $form['body_field'] = 
+      node_body_field($node, $type->body_label, $type->min_word_count);
+  }
+
+  $form['link'] = array(
+    '#type' => 'textfield',
+    '#title' => t('URL'),
+    '#default_value' => isset($node->link) ? $node->link : $_ezproxied_node_link_default,
+  );
+ 
+  return $form; 
+}
+
+function ezproxied_node_validate( &$node) {
+  _ezproxy_check_link($node);
+}
+
+function ezproxied_node_insert( $node) {
+
+  $links = _make_ezproxied_node_links( $node);
+  db_query("INSERT INTO {ezproxied_node} (nid, vid, link, ezproxy_link, redirect_link, redirect_id, title) VALUES(%d, %d, '%s', '%s', '%s', %d, '%s')", 
+    $node->nid, $node->vid, $node->link, $links['ezproxy_link'], $links['redirect_link'], $links['redirect_id'], $node->title);
+}
+
+function ezproxied_node_update( $node) {
+  
+  if ( $node->revision) {
+    ezproxied_node_insert($node);
+  } else {
+    $links = _make_ezproxied_node_links( $node);
+    db_query("UPDATE {ezproxied_node} 
+      SET link='%s', ezproxy_link='%s', redirect_link='%s', title='%s' 
+      WHERE vid=%d", 
+      $node->link, $links['ezproxy_link'], $links['redirect_link'], $node->title, $node->vid);
+  }
+}
+
+function ezproxied_node_delete($node) {
+  db_query( "DELETE FROM {ezproxied_node} WHERE nid=%d", $node->nid);
+}
+
+function ezproxied_node_load( $node) {
+
+  $additions = db_fetch_object( db_query('SELECT link, ezproxy_link, redirect_link, redirect_id FROM {ezproxied_node} WHERE vid = %d', $node->vid));
+
+  return $additions;
+
+}
+
+function ezproxied_node_nodeapi( &$node, $op, $teaser, $page) {
+  switch ($op) {
+    case 'delete revision':
+      db_query( 'DELETE FROM {ezproxied_node} WHERE vid=%d', $node->vid);
+  }
+}
+
+function ezproxied_node_view( $node, $teaser = FALSE, $page = FALSE) {
+
+  $node = node_prepare( $node, $teaser);
+
+  $node->content['redirect_link'] = array(
+    '#value' => theme('ezproxied_node_redirect_link', $node),
+    '#weight' => 1,
+  );
+
+  return $node;
+
+}
+
+function ezproxied_node_redirect($redirect_id = NULL) {
+
+  $info = db_fetch_object( db_query('SELECT * FROM {ezproxied_node} WHERE redirect_id = %d', $redirect_id));
+  if ( $info->ezproxy_link) {
+    header('Location: '. $info->ezproxy_link, TRUE, '301');
+  } else {
+    header("HTTP/1.0 404 Not Found");
+    $content .= t('Could not locate a destination URL for this redirect.');
+    return $content;
+  }
+}
+
+function ezproxied_node_theme() {
+  return array(
+    'ezproxied_node_redirect_link' => array (
+      'arguments' => array('node'),
+    ),
+  );
+}
+
+function theme_ezproxied_node_redirect_link($node) {
+
+  $output .= '<div class="ezproxied_node_redirect_link">';
+  if ( $node->redirect_link) {
+    $output .= l(t("Connect"), $node->redirect_link);
+  }
+  $output .= '</div>';
+
+  return $output;
+
+}
+
+function ezproxied_node_views_api() {
+  return array('api' => 2.0);
+}
+
+function _make_ezproxied_node_links ( $node) {
+
+  global $_ezproxied_node_ezproxy_base;
+
+  if ( $node->link) {
+    $redirect_id = db_result(db_query('SELECT max(redirect_id) FROM {ezproxied_node}'));
+    if ( !$redirect_id) {
+      $redirect_id = 0;
+    }
+    $redirect_id++;
+    $links['ezproxy_link'] = $_ezproxied_node_ezproxy_base .'/login?url='. $node->link;
+    $links['redirect_id'] = $redirect_id;
+    $links['redirect_link'] = 'indexes/redirect/'. $redirect_id;
+
+    return $links; 
+  }
+
+}
+
+function _ezproxy_check_link ($node) {
+
+  global $_ezproxied_node_ezproxy_base, $_ezproxied_node_ezproxy_ws_passwd;
+
+  if ( $node->link) {
+    $xml = "<?xml version=\"1.0\"?>
+    <proxy_url_request password=\"" . $_ezproxied_node_ezproxy_ws_passwd . "\">
+        <urls>";
+
+    $xml .= "\n\t<url>" . htmlspecialchars($node->link) . "</url>";
+
+    $xml .= "
+        </urls>
+    </proxy_url_request>";
+
+    $xml_response = file_get_contents($_ezproxied_node_ezproxy_base 
+      .'/proxy_url?xml='. urlencode($xml));
+
+    $dom = new DOMDocument('1.0', 'utf-8');
+    $dom->loadXML(mb_convert_encoding($xml_response, "UTF-8"));
+
+    $url = $dom->getElementsByTagName("url")->item(0);
+    $ezproxied = $url->getAttribute("proxy");
+
+    if ( $ezproxied != 'true') {
+      $example_config = _ezproxy_example_config($node);
+      drupal_set_message(t('<p>This resource is not covered by the existing EZProxy configuration.</p>Here is an example configuration to get you started:<br />'. $example_config), 'warning');
+    } else {
+      drupal_set_message(t('Resource is already covered by the existing EZProxy configuration.'));
+    }
+
+  }
+  
+}
+
+function _ezproxy_example_config($node) {
+  $url_parts = parse_url( $node->link);
+
+  $output = '<pre>
+Title '. $node->title .'
+URL '. $node->link .'
+DJ '. $url_parts['host'] .'
+  ';
+
+  return $output;
+}
+
+function ezproxied_node_block ($op = 'list', $delta = 0, $edit = array()) {
+
+  switch ($op) {
+
+    case 'list':
+      $blocks[0]['info'] = t("Alpha Pager for Databases");
+      $blocks[0]['cache'] = BLOCK_NO_CACHE;
+      
+      return $blocks;
+
+    case 'view':
+      $block['subject'] = t("Databases by Alphabet");
+      
+      $result = db_query("SELECT SUBSTR({node}.title, 1, 1) AS title_truncated,
+        COUNT(DISTINCT({node}.nid)) AS num_records
+        FROM {node} {node} 
+        WHERE ({node}.status <> 0) AND ({node}.type in ('ezproxied_node'))
+        GROUP BY title_truncated
+        ORDER BY title_truncated ASC");
+      while ( $data = db_fetch_object( $result)) {
+        $content .= '<span class="database_alpha_link">'. 
+          l($data->title_truncated, 'databases/'. $data->title_truncated) 
+          .'</span>';
+      }
+
+      $block['content'] = '<div id="database_alpha_pager">
+        <span class="database_alpha_link">'. l('All', 'databases/all')
+        .'</span>'. $content .'</div>';
+
+      return $block;
+  }
+
+}
+

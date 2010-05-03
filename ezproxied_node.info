@@ -1,0 +1,6 @@
+; $Id$
+name = EZProxied Nodes
+description = "Enables the creation of an EZProxied node, and provides a 'permanent' link"
+core = 6.x
+package = MUL
+version = 6.x-1.1
