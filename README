@@ -1,2 +1,4 @@
 simple drupal content type for ezproxying urls, making a permanent redirect
 url, etc
+
+some configuration is available in ezproxied_node.module.
